@@ -11,21 +11,16 @@ public class DistributionCenterOptimization {
     private int[] mejorAsignacion;
     private int costoTotal;
     private int[] clientesAsignados;
+    private int[] costosMinimosPorCliente;
+    private int[][] centrosOrdenadosPorCliente;
 
     public void inicializar(String archivo, int[][] costosCalculados) throws IOException {
         System.out.println("Iniciando inicialización...");
         leerDatosDeArchivo(archivo);
         
-        System.out.println("Datos leídos: " + numClientes + " clientes, " + numCentros + " centros");
-        
-        if (costosCalculados == null) {
-            throw new IllegalArgumentException("La matriz de costos calculados es null");
-        }
-        if (costosCalculados.length != numCentros) {
-            throw new IllegalArgumentException("La matriz de costos no tiene el número correcto de centros. Esperado: " + numCentros + ", Recibido: " + costosCalculados.length);
-        }
-        if (costosCalculados[0].length != numClientes) {
-            throw new IllegalArgumentException("La matriz de costos no tiene el número correcto de clientes. Esperado: " + numClientes + ", Recibido: " + costosCalculados[0].length);
+        if (costosCalculados == null || costosCalculados.length != numCentros || 
+            costosCalculados[0].length != numClientes) {
+            throw new IllegalArgumentException("Matriz de costos inválida");
         }
 
         this.costosTransporte = costosCalculados;
@@ -34,6 +29,9 @@ public class DistributionCenterOptimization {
         this.mejorAsignacion = new int[numClientes];
         Arrays.fill(clientesAsignados, -1);
         this.costoTotal = Integer.MAX_VALUE;
+        
+        precalcularCostosMinimosPorCliente();
+        precalcularOrdenCentros();
         
         System.out.println("Inicialización completada exitosamente");
     }
@@ -60,92 +58,106 @@ public class DistributionCenterOptimization {
         }
     }
 
-    private boolean[] obtenerCentrosUtilizados() {
-        boolean[] centrosUsados = new boolean[numCentros];
+    private void precalcularCostosMinimosPorCliente() {
+        costosMinimosPorCliente = new int[numClientes];
         for (int cliente = 0; cliente < numClientes; cliente++) {
-            if (mejorAsignacion[cliente] >= 0 && mejorAsignacion[cliente] < numCentros) {
-                centrosUsados[mejorAsignacion[cliente]] = true;
-            } else {
-                System.err.println("Error: Asignación inválida para cliente " + cliente + ": " + mejorAsignacion[cliente]);
+            int costoMinimo = Integer.MAX_VALUE;
+            for (int centro = 0; centro < numCentros; centro++) {
+                if (costosTransporte[centro][cliente] != Integer.MAX_VALUE) {
+                    int costoTotal = costosTransporte[centro][cliente] + centrosCostos[centro][1];
+                    costoMinimo = Math.min(costoMinimo, costoTotal);
+                }
             }
+            costosMinimosPorCliente[cliente] = costoMinimo;
         }
-        return centrosUsados;
+    }
+
+    private void precalcularOrdenCentros() {
+        centrosOrdenadosPorCliente = new int[numClientes][numCentros];
+        for (int cliente = 0; cliente < numClientes; cliente++) {
+            centrosOrdenadosPorCliente[cliente] = obtenerCentrosOrdenadosPorCosto(cliente);
+        }
     }
 
     private void backtracking(int cliente) {
-        
-        // Si ya asignamos todos los clientes, evaluamos la solución
         if (cliente == numClientes) {
             evaluarSolucion();
             return;
         }
 
-        // Para cada cliente, probamos asignarlo a cada centro disponible
-        for (int centro = 0; centro < numCentros; centro++) {
-            try {
-                // Solo consideramos centros que tienen una ruta válida al cliente
-                if (costosTransporte[centro][cliente] != Integer.MAX_VALUE) {
-                    
-                    // Si el centro no estaba seleccionado, lo marcamos
-                    boolean centroNuevo = !centrosSeleccionados[centro];
-                    
-                    // Asignamos el cliente al centro
-                    clientesAsignados[cliente] = centro;
-                    centrosSeleccionados[centro] = true;
+        int costoAcumulado = calcularCostoAcumulado(cliente);
+        int costoMinimoRestante = calcularCostoMinimoRestante(cliente);
+        
+        if (costoTotal != Integer.MAX_VALUE && 
+            costoAcumulado + costoMinimoRestante >= costoTotal) {
+            return;
+        }
 
-                    // Verificamos si la solución parcial actual es prometedora
-                    if (esSolucionParcialPrometedora(cliente, centro)) {
-                        backtracking(cliente + 1);
-                    }
+        int centrosAProbar = Math.min(3, numCentros);
+        for (int i = 0; i < centrosAProbar; i++) {
+            int centro = centrosOrdenadosPorCliente[cliente][i];
+            
+            if (costosTransporte[centro][cliente] != Integer.MAX_VALUE && 
+                esCentroViable(centro, cliente)) {
+                
+                clientesAsignados[cliente] = centro;
+                centrosSeleccionados[centro] = true;
 
-                    // Deshacemos la asignación si el centro era nuevo y no hay más clientes asignados
-                    if (centroNuevo && !hayClientesRestantesParaCentro(centro, cliente)) {
-                        centrosSeleccionados[centro] = false;
-                    }
-                    
-                    // Si no encontramos una solución válida, dejamos al cliente sin asignar
-                    clientesAsignados[cliente] = -1;
+                backtracking(cliente + 1);
+
+                if (!hayClientesRestantesParaCentro(centro, cliente)) {
+                    centrosSeleccionados[centro] = false;
                 }
-            } catch (Exception e) {
-                System.err.println("Error procesando cliente " + cliente + " con centro " + centro);
-                System.err.println("Estado actual: " + Arrays.toString(clientesAsignados));
-                e.printStackTrace();
-                throw e;
+                clientesAsignados[cliente] = -1;
             }
         }
     }
 
-    private boolean esSolucionParcialPrometedora(int clienteActual, int centroAsignado) {
-        try {
-            int costoActualParcial = 0;
-            boolean[] centrosUsadosParcial = new boolean[numCentros];
-            
-            // Calculamos el costo de las asignaciones realizadas hasta ahora
-            for (int i = 0; i <= clienteActual; i++) {
-                int centro = clientesAsignados[i];
-                if (centro != -1) {
-                    centrosUsadosParcial[centro] = true;
-                    int costoTransporte = costosTransporte[centro][i];
-                    int costoUnitarioPuerto = centrosCostos[centro][1];
-                    int volumenCliente = clientesVolumen[i][1];
-                    
-                    costoActualParcial += volumenCliente * (costoTransporte + costoUnitarioPuerto);
-                }
+    private int[] obtenerCentrosOrdenadosPorCosto(int cliente) {
+        class CentroConCosto implements Comparable<CentroConCosto> {
+            int centro;
+            int costo;
+
+            CentroConCosto(int centro, int costo) {
+                this.centro = centro;
+                this.costo = costo;
             }
-            
-            // Agregamos los costos fijos de los centros utilizados
-            for (int i = 0; i < numCentros; i++) {
-                if (centrosUsadosParcial[i]) {
-                    costoActualParcial += centrosCostos[i][2];
-                }
+
+            @Override
+            public int compareTo(CentroConCosto otro) {
+                return Integer.compare(this.costo, otro.costo);
             }
-            
-            return costoActualParcial < costoTotal;
-        } catch (Exception e) {
-            System.err.println("Error evaluando solución parcial para cliente " + clienteActual + " y centro " + centroAsignado);
-            e.printStackTrace();
-            throw e;
         }
+
+        CentroConCosto[] centros = new CentroConCosto[numCentros];
+        for (int i = 0; i < numCentros; i++) {
+            int costoTotal = costosTransporte[i][cliente];
+            if (costoTotal != Integer.MAX_VALUE) {
+                costoTotal += centrosCostos[i][1];
+            }
+            centros[i] = new CentroConCosto(i, costoTotal);
+        }
+
+        Arrays.sort(centros);
+        return Arrays.stream(centros).mapToInt(c -> c.centro).toArray();
+    }
+
+    private boolean esCentroViable(int centro, int cliente) {
+        return centrosSeleccionados[centro] || 
+               costosTransporte[centro][cliente] <= costosMinimosPorCliente[cliente] * 2;
+    }
+
+    private int calcularCostoMinimoRestante(int clienteActual) {
+        int costoMinimo = 0;
+        for (int i = clienteActual; i < numClientes; i++) {
+            costoMinimo += costosMinimosPorCliente[i] * clientesVolumen[i][1];
+        }
+        int centrosNecesarios = Math.max(1, (numClientes - clienteActual) / 20);
+        int costoFijoMinimo = Integer.MAX_VALUE;
+        for (int i = 0; i < numCentros; i++) {
+            costoFijoMinimo = Math.min(costoFijoMinimo, centrosCostos[i][2]);
+        }
+        return costoMinimo + (centrosNecesarios * costoFijoMinimo);
     }
 
     private boolean hayClientesRestantesParaCentro(int centro, int clienteActual) {
@@ -166,76 +178,80 @@ public class DistributionCenterOptimization {
         }
     }
 
-    private int calcularCostoTotal() {
-        try {
-            int costo = 0;
-            boolean[] centrosUsados = new boolean[numCentros];
+    private int calcularCostoAcumulado(int clienteActual) {
+        int costoAcum = 0;
+        int[] clientesPorCentro = new int[numCentros];
 
-            // Calcular costos de transporte y operación
-            for (int cliente = 0; cliente < numClientes; cliente++) {
-                int centro = clientesAsignados[cliente];
-                if (centro != -1) {
-                    centrosUsados[centro] = true;
-                    // Costo de transporte cliente -> centro -> puerto
-                    costo += clientesVolumen[cliente][1] * 
-                            (costosTransporte[centro][cliente] + centrosCostos[centro][1]);
-                }
+        for (int i = 0; i < clienteActual; i++) {
+            int centro = clientesAsignados[i];
+            if (centro != -1) {
+                clientesPorCentro[centro]++;
+                costoAcum += clientesVolumen[i][1] * 
+                            (costosTransporte[centro][i] + centrosCostos[centro][1]);
             }
-
-            // Agregar costos fijos de los centros utilizados
-            for (int centro = 0; centro < numCentros; centro++) {
-                if (centrosUsados[centro]) {
-                    costo += centrosCostos[centro][2];
-                }
-            }
-
-            return costo;
-        } catch (Exception e) {
-            System.err.println("Error calculando costo total");
-            System.err.println("Estado de asignación: " + Arrays.toString(clientesAsignados));
-            e.printStackTrace();
-            throw e;
         }
+
+        for (int i = 0; i < numCentros; i++) {
+            if (clientesPorCentro[i] > 0) {
+                costoAcum += centrosCostos[i][2];
+            }
+        }
+
+        return costoAcum;
+    }
+
+    private int calcularCostoTotal() {
+        int costo = 0;
+        int[] clientesPorCentro = new int[numCentros];
+
+        for (int cliente = 0; cliente < numClientes; cliente++) {
+            int centro = clientesAsignados[cliente];
+            if (centro != -1) {
+                clientesPorCentro[centro]++;
+                costo += clientesVolumen[cliente][1] * 
+                        (costosTransporte[centro][cliente] + centrosCostos[centro][1]);
+            }
+        }
+
+        for (int centro = 0; centro < numCentros; centro++) {
+            if (clientesPorCentro[centro] > 0) {
+                costo += centrosCostos[centro][2];
+            }
+        }
+
+        return costo;
+    }
+
+    private boolean[] obtenerCentrosUtilizados() {
+        boolean[] centrosUsados = new boolean[numCentros];
+        for (int cliente = 0; cliente < numClientes; cliente++) {
+            if (mejorAsignacion[cliente] >= 0 && mejorAsignacion[cliente] < numCentros) {
+                centrosUsados[mejorAsignacion[cliente]] = true;
+            }
+        }
+        return centrosUsados;
     }
 
     private void leerDatosDeArchivo(String filename) throws IOException {
         try (BufferedReader br = new BufferedReader(new FileReader(filename))) {
-            // Leer número de clientes y centros
             numClientes = Integer.parseInt(br.readLine().split("\t")[0]);
             numCentros = Integer.parseInt(br.readLine().split("\t")[0]);
 
-            System.out.println("Leyendo datos para " + numClientes + " clientes y " + numCentros + " centros");
-
-            // Inicializar arrays
             centrosCostos = new int[numCentros][3];
             clientesVolumen = new int[numClientes][2];
 
-            // Leer datos de los centros
             for (int i = 0; i < numCentros; i++) {
                 String[] datos = br.readLine().split(",");
-                centrosCostos[i][0] = Integer.parseInt(datos[0]); // ID del centro
-                centrosCostos[i][1] = Integer.parseInt(datos[1]); // Costo unitario al puerto
-                centrosCostos[i][2] = Integer.parseInt(datos[2]); // Costo fijo anual
-                System.out.println("Centro " + i + " leído: ID=" + centrosCostos[i][0] + 
-                                 ", CostoUnitario=" + centrosCostos[i][1] + 
-                                 ", CostoFijo=" + centrosCostos[i][2]);
+                centrosCostos[i][0] = Integer.parseInt(datos[0]);
+                centrosCostos[i][1] = Integer.parseInt(datos[1]);
+                centrosCostos[i][2] = Integer.parseInt(datos[2]);
             }
 
-            // Leer datos de los clientes
             for (int i = 0; i < numClientes; i++) {
                 String[] datos = br.readLine().split(",");
-                clientesVolumen[i][0] = Integer.parseInt(datos[0]); // ID del cliente
-                clientesVolumen[i][1] = Integer.parseInt(datos[1]); // Volumen de producción
-                System.out.println("Cliente " + i + " leído: ID=" + clientesVolumen[i][0] + 
-                                 ", Volumen=" + clientesVolumen[i][1]);
+                clientesVolumen[i][0] = Integer.parseInt(datos[0]);
+                clientesVolumen[i][1] = Integer.parseInt(datos[1]);
             }
-
-        } catch (IOException e) {
-            System.err.println("Error al leer el archivo " + filename + ": " + e.getMessage());
-            throw e;
-        } catch (NumberFormatException e) {
-            System.err.println("Error al parsear números del archivo: " + e.getMessage());
-            throw e;
         }
     }
 
@@ -255,18 +271,20 @@ public class DistributionCenterOptimization {
         
         System.out.println("\nAsignación de clientes:");
         for (int i = 0; i < numClientes; i++) {
-            System.out.println("Cliente " + i + 
-                             " (Volumen: " + clientesVolumen[i][1] + ") -> Centro " + 
-                             mejorAsignacion[i] + 
-                             " (Costo transporte: " + costosTransporte[mejorAsignacion[i]][i] + ")");
+            if (mejorAsignacion[i] != -1) {
+                System.out.println("Cliente " + i + 
+                                 " (Volumen: " + clientesVolumen[i][1] + ") -> Centro " + 
+                                 mejorAsignacion[i] + 
+                                 " (Costo transporte: " + costosTransporte[mejorAsignacion[i]][i] + ")");
+            }
         }
     }
 }
 
 class SolucionLogistica {
-    private final int[] asignacionClientes;    // Qué centro atiende a cada cliente
-    private final int costoTotal;              // Costo total de la solución
-    private final boolean[] centrosUtilizados; // Qué centros se utilizan
+    private final int[] asignacionClientes;
+    private final int costoTotal;
+    private final boolean[] centrosUtilizados;
 
     public SolucionLogistica(int[] asignacionClientes, int costoTotal, boolean[] centrosUtilizados) {
         this.asignacionClientes = asignacionClientes;
